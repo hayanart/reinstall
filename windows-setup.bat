@@ -297,9 +297,87 @@ if "%EnableEMS%"=="1" (
     set EMS=/EMSPort:COM1 /EMSBaudRate:115200
 )
 
+rem === PATCH hayanart/reinstall: pre-flight + setup.exe failure capture ===
+if exist Y:\sources\install.wim goto :wim_found
+if exist Y:\sources\install.esd goto :wim_found
+echo [PATCH] FATAL: install.wim/install.esd not found in Y:\sources\ >&2
+echo [PATCH] Y: drive contents: >&2
+dir Y:\sources\ >&2
+echo [PATCH] Halting - setup.exe will NOT run. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b 1
+:wim_found
+if exist Y:\sources\install.wim set "wimfile=Y:\sources\install.wim"
+if not exist Y:\sources\install.wim set "wimfile=Y:\sources\install.esd"
+echo [PATCH] Pre-flight OK: install source found.
+dism /Get-ImageInfo /ImageFile:%wimfile% > X:\wiminfo.txt 2>nul
+find /i "Index :" X:\wiminfo.txt >nul 2>nul
+if errorlevel 1 goto :wiminfo_skip
+find /i "WINDOWS 11 PRO - SUPERLITE" X:\wiminfo.txt >nul 2>nul
+if not errorlevel 1 goto :wiminfo_ok
+echo [PATCH] FATAL: image name not found in install.wim - see X:\wiminfo.txt >&2
+type X:\wiminfo.txt >&2
+echo [PATCH] Halting - setup.exe will NOT run. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b 1
+:wiminfo_ok
+echo [PATCH] Image name verified in install.wim.
+:wiminfo_skip
+if exist X:\wiminfo.txt del X:\wiminfo.txt
 echo on
 %setup% %ResizeRecoveryPartition% %EMS% %Unattended%
-exit /b
+set "setup_rc=%ERRORLEVEL%"
+@echo off
+echo.
+echo [PATCH] setup.exe exited with code %setup_rc%.
+echo [PATCH] Preserving setup logs to Y:\setuplogs\ ...
+if not exist Y:\setuplogs\ mkdir Y:\setuplogs\
+if exist "X:\$WINDOWS.~BT\Sources\Panther\setupact.log" copy /y "X:\$WINDOWS.~BT\Sources\Panther\setupact.log" Y:\setuplogs\ >nul
+if exist "X:\$WINDOWS.~BT\Sources\Panther\setuperr.log" copy /y "X:\$WINDOWS.~BT\Sources\Panther\setuperr.log" Y:\setuplogs\ >nul
+if exist X:\Windows\Panther\*.log copy /y X:\Windows\Panther\*.log Y:\setuplogs\ >nul
+echo setup_rc=%setup_rc% > Y:\setup-result.txt
+echo setup=%setup% >> Y:\setup-result.txt
+echo boot_type=%BootType% disk=%DiskIndex% >> Y:\setup-result.txt
+dir Y:\setuplogs\ >> Y:\setup-result.txt 2>nul
+if "%setup_rc%"=="0" goto :setup_rc_ok
+echo [PATCH] ERROR: setup.exe FAILED with exit code %setup_rc%. >&2
+echo [PATCH] Logs preserved in Y:\setuplogs\ - see setuperr.log and setupact.log. >&2
+echo [PATCH] Halting - NOT rebooting into a possibly dead disk. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b %setup_rc%
+:setup_rc_ok
+echo [PATCH] setup.exe returned 0 - verifying boot files on the OS partition...
+if "%BootType%"=="bios" goto :check_boot_bios
+goto :check_boot_efi
+:check_boot_bios
+(echo select disk %DiskIndex% & echo select part 1 & echo assign letter=Z) | diskpart >nul
+if exist Z:\bootmgr if exist Z:\Boot\BCD goto :boot_ok
+if exist C:\bootmgr if exist C:\Boot\BCD goto :boot_ok
+if exist D:\bootmgr if exist D:\Boot\BCD goto :boot_ok
+echo [PATCH] ERROR: bootmgr or Boot BCD NOT found on OS partition - Windows did not install. >&2
+echo setup_rc=%setup_rc% bootmgr_or_bcd=missing > Y:\setup-failed.txt
+echo [PATCH] Halting - NOT rebooting into a dead disk. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b 1
+:check_boot_efi
+(echo select disk %DiskIndex% & echo select part 3 & echo assign letter=Z) | diskpart >nul
+if exist Z:\Windows\System32\winload.exe goto :boot_ok
+if exist C:\Windows\System32\winload.exe goto :boot_ok
+echo [PATCH] ERROR: Windows files NOT found on OS partition - Windows did not install. >&2
+echo setup_rc=%setup_rc% winload=missing > Y:\setup-failed.txt
+echo [PATCH] Halting - NOT rebooting into a dead disk. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b 1
+:boot_ok
+echo [PATCH] Boot files OK. Setup succeeded.
+echo [PATCH] Rebooting into the installed Windows...
+wpeutil reboot
+exit /b 0
 
 
 
