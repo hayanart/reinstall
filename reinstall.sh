@@ -5172,6 +5172,7 @@ boot-wim:
 target-disk:
 force-boot-mode:
 force-old-windows-setup:
+use-dism:
 EOF
 }
 
