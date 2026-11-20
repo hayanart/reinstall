@@ -8537,8 +8537,21 @@ EOF
     download $confhome/windows-setup.bat $startnet_cmd
     sed -i "s/@installer_part_label@/$INSTALLER_PART_LABEL/gi" $startnet_cmd
 
-    # dism 手动释放镜像时用
-    # sed -i "s|@image_name@|$image_name|" "$startnet.cmd"
+    # DISM bypass: install without setup.exe (Ghost: setup.exe dies
+    # opaquely, 0xC0000135 new / exit 255 old, no logs either time).
+    # shellcheck disable=SC2154
+    if [ "$use_dism" = 1 ]; then
+        sed -i 's/UseDism=0/UseDism=1/i' $startnet_cmd
+    fi
+
+    # Image name for the pre-flight check + dism /Apply-Image /Name.
+    # $image_name was already resolved to the real WIM case above.
+    # Anchored to the assignment line only, so the placeholder guard
+    # elsewhere in windows-setup.bat is left alone.
+    if [ -n "$image_name" ]; then
+        image_name_esc=$(printf '%s' "$image_name" | sed -e 's/[&|\\]/\\&/g')
+        sed -i "s|^set WimImageName=@image_name@|set WimImageName=$image_name_esc|" $startnet_cmd
+    fi
 
     # shellcheck disable=SC2154
     if [ "$force_old_windows_setup" = 1 ]; then

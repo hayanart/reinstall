@@ -238,6 +238,8 @@ for %%a in (RAM TPM SecureBoot) do (
 
 rem 设置
 set ForceOldSetup=0
+set UseDism=0
+set WimImageName=@image_name@
 set EnableUnattended=1
 set EnableEMS=0
 
@@ -314,7 +316,21 @@ echo [PATCH] Pre-flight OK: install source found.
 dism /Get-ImageInfo /ImageFile:%wimfile% > X:\wiminfo.txt 2>nul
 find /i "Index :" X:\wiminfo.txt >nul 2>nul
 if errorlevel 1 goto :wiminfo_skip
-find /i "WINDOWS 11 PRO - SUPERLITE" X:\wiminfo.txt >nul 2>nul
+if "%WimImageName%"=="@image_name@" (
+    echo [PATCH] FATAL: image name placeholder was not replaced by trans.sh - cannot verify image. >&2
+    echo [PATCH] Halting - setup.exe will NOT run. >&2
+    echo [PATCH] Press any key to drop to a command prompt for inspection.
+    pause
+    exit /b 1
+)
+if "%WimImageName%"=="" (
+    echo [PATCH] FATAL: image name is empty - cannot verify image. >&2
+    echo [PATCH] Halting - setup.exe will NOT run. >&2
+    echo [PATCH] Press any key to drop to a command prompt for inspection.
+    pause
+    exit /b 1
+)
+find /i "%WimImageName%" X:\wiminfo.txt >nul 2>nul
 if not errorlevel 1 goto :wiminfo_ok
 echo [PATCH] FATAL: image name not found in install.wim - see X:\wiminfo.txt >&2
 type X:\wiminfo.txt >&2
@@ -326,6 +342,9 @@ exit /b 1
 echo [PATCH] Image name verified in install.wim.
 :wiminfo_skip
 if exist X:\wiminfo.txt del X:\wiminfo.txt
+rem DISM bypass: skip setup.exe entirely when UseDism=1 (set by trans.sh
+rem from --use-dism). setup.exe dies opaquely on some images.
+if "%UseDism%"=="1" goto :dism_path
 echo on
 %setup% %ResizeRecoveryPartition% %EMS% %Unattended%
 set "setup_rc=%ERRORLEVEL%"
@@ -381,6 +400,142 @@ exit /b 0
 
 
 
+
+
+rem === PATCH hayanart/reinstall: DISM bypass (UseDism=1) ===
+rem setup.exe dies opaquely on some images (new .NET setup.exe: 0xC0000135
+rem missing mscoree.dll; old setup.exe: exit 255, no logs either time).
+rem DISM applies the image directly and reports real errors.
+:dism_path
+echo [PATCH] DISM path: bypassing setup.exe (UseDism=1).
+echo [PATCH] Image: %WimImageName%
+rem Assign a fixed letter to the OS partition so DISM has a stable target.
+rem BIOS: part 1 is the OS partition. EFI: part 3 is the OS partition,
+rem part 1 is the EFI system partition.
+if "%BootType%"=="bios" goto :dism_assign_bios
+(echo select disk %DiskIndex% & echo select part 3 & echo assign letter=Z) | diskpart >nul
+(echo select disk %DiskIndex% & echo select part 1 & echo assign letter=S) | diskpart >nul
+goto :dism_assign_done
+:dism_assign_bios
+(echo select disk %DiskIndex% & echo select part 1 & echo assign letter=Z) | diskpart >nul
+:dism_assign_done
+if not exist Z:\ (
+    echo [PATCH] FATAL: cannot assign drive letter Z to the OS partition. >&2
+    echo [PATCH] Halting - DISM has no target. >&2
+    echo [PATCH] Press any key to drop to a command prompt for inspection.
+    pause
+    exit /b 1
+)
+echo [PATCH] Applying image with DISM - this takes several minutes...
+echo on
+dism /Apply-Image /ImageFile:%wimfile% /Name:"%WimImageName%" /ApplyDir:Z:\
+set "dism_rc=%ERRORLEVEL%"
+@echo off
+echo.
+echo [PATCH] dism /Apply-Image exited with code %dism_rc%.
+echo method=dism > Y:\setup-result.txt
+echo image=%WimImageName% >> Y:\setup-result.txt
+echo dism_apply_rc=%dism_rc% >> Y:\setup-result.txt
+echo wimfile=%wimfile% boot_type=%BootType% disk=%DiskIndex% >> Y:\setup-result.txt
+if "%dism_rc%"=="0" goto :dism_apply_ok
+echo [PATCH] ERROR: dism /Apply-Image FAILED with exit code %dism_rc%. >&2
+echo [PATCH] Preserving DISM logs to Y:\setuplogs\ ... >&2
+if not exist Y:\setuplogs\ mkdir Y:\setuplogs\
+if exist X:\Windows\Logs\DISM\dism.log copy /y X:\Windows\Logs\DISM\dism.log Y:\setuplogs\ >nul
+if exist Z:\Windows\Logs\DISM\dism.log copy /y Z:\Windows\Logs\DISM\dism.log Y:\setuplogs\ >nul
+echo method=dism dism_apply_rc=%dism_rc% > Y:\setup-failed.txt
+echo [PATCH] Halting - NOT rebooting into a possibly dead disk. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b %dism_rc%
+:dism_apply_ok
+if exist Z:\Windows\Setup\State\State.ini find /i "ImageState" Z:\Windows\Setup\State\State.ini >> Y:\setup-result.txt 2>nul
+rem --- Drivers: inject VirtIO/SCSI + net drivers into the offline image.
+rem Best-effort: one bad driver must not kill the install; the Panther
+rem unattend + first boot still apply the rest. (Ghost lost its network
+rem driver before - without this, first boot has no NIC and no RDP.)
+if not exist X:\drivers\ goto :skip_drv1
+echo [PATCH] Injecting drivers from X:\drivers\ ...
+dism /Image:Z:\ /Add-Driver /Driver:X:\drivers /Recurse
+set "drv_rc=%ERRORLEVEL%"
+echo drivers_rc=%drv_rc% >> Y:\setup-result.txt
+if not "%drv_rc%"=="0" echo [PATCH] WARNING: driver injection from X:\drivers\ returned %drv_rc% - continuing. >&2
+:skip_drv1
+if not exist X:\custom_drivers\ goto :skip_drv2
+echo [PATCH] Injecting drivers from X:\custom_drivers\ ...
+dism /Image:Z:\ /Add-Driver /Driver:X:\custom_drivers /Recurse
+set "drv2_rc=%ERRORLEVEL%"
+echo custom_drivers_rc=%drv2_rc% >> Y:\setup-result.txt
+if not "%drv2_rc%"=="0" echo [PATCH] WARNING: driver injection from X:\custom_drivers\ returned %drv2_rc% - continuing. >&2
+:skip_drv2
+rem --- Apply specialize + offlineServicing settings offline (RDP listener,
+rem firewall group, drivers). Best-effort: a stripped image may lack some
+rem unattend components; the Panther copy below is the primary mechanism
+rem and first boot applies the same passes.
+echo [PATCH] Applying unattend offline (specialize + offlineServicing)...
+dism /Image:Z:\ /Apply-Unattend:X:\windows.xml
+set "unattend_rc=%ERRORLEVEL%"
+echo unattend_rc=%unattend_rc% >> Y:\setup-result.txt
+if not "%unattend_rc%"=="0" echo [PATCH] WARNING: dism /Apply-Unattend returned %unattend_rc% - continuing, first boot will apply the unattend from Panther. >&2
+rem --- First boot must process specialize + oobeSystem (Administrator
+rem password, RDP, OOBE skip). setup.exe normally stages the unattend
+rem here; the DISM path does it explicitly. HARD FAIL if the copy fails:
+rem without this file the admin password is never set.
+if not exist Z:\Windows\Panther\ mkdir Z:\Windows\Panther\
+copy /y X:\windows.xml Z:\Windows\Panther\unattend.xml >nul
+if not errorlevel 1 goto :panther_ok
+echo [PATCH] FATAL: cannot copy unattend to Panther - admin password would never be set. >&2
+echo [PATCH] Halting - NOT rebooting. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b 1
+:panther_ok
+echo [PATCH] Unattend staged at Panther - first boot will set the admin password.
+rem --- SetupComplete.cmd safety net (runs as SYSTEM at end of setup):
+rem enable RDP, open the RDP firewall rule, set WIB timezone, make sure
+rem Administrator is active. The password itself comes ONLY from the
+rem Panther unattend (oobeSystem) - never written here or in any log.
+if not exist Z:\Windows\Setup\Scripts\ mkdir Z:\Windows\Setup\Scripts\
+if not exist Z:\Windows\Setup\Scripts\SetupComplete.cmd echo @echo off > Z:\Windows\Setup\Scripts\SetupComplete.cmd
+echo. >> Z:\Windows\Setup\Scripts\SetupComplete.cmd
+echo rem [PATCH-DISM] RDP safety net - appended by windows-setup.bat >> Z:\Windows\Setup\Scripts\SetupComplete.cmd
+echo reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f >> Z:\Windows\Setup\Scripts\SetupComplete.cmd
+echo netsh advfirewall firewall set rule group="remote desktop" new enable=Yes >> Z:\Windows\Setup\Scripts\SetupComplete.cmd
+echo tzutil /s "SE Asia Standard Time" >> Z:\Windows\Setup\Scripts\SetupComplete.cmd
+echo net user administrator /active:yes >> Z:\Windows\Setup\Scripts\SetupComplete.cmd
+echo del "%%~f0" >> Z:\Windows\Setup\Scripts\SetupComplete.cmd
+rem --- Offline registry: enable the RDP listener even if first boot never
+rem runs specialize (non-sysprepped image). Best-effort; the Panther
+rem unattend + SetupComplete above are the primary mechanisms.
+reg load HKLM\OFFLINE_SYSTEM Z:\Windows\System32\config\SYSTEM >nul 2>nul
+if errorlevel 1 goto :skip_offline_reg
+reg add "HKLM\OFFLINE_SYSTEM\ControlSet001\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f >nul
+set "offreg_rc=%ERRORLEVEL%"
+reg unload HKLM\OFFLINE_SYSTEM >nul 2>nul
+echo offline_reg_rc=%offreg_rc% >> Y:\setup-result.txt
+if not "%offreg_rc%"=="0" echo [PATCH] WARNING: offline RDP registry edit returned %offreg_rc% - continuing. >&2
+:skip_offline_reg
+rem --- Create boot files. BIOS: MBR boot on the OS partition itself.
+echo [PATCH] Creating boot files with bcdboot...
+if "%BootType%"=="bios" goto :dism_bcd_bios
+bcdboot Z:\Windows /s S: /f UEFI
+goto :dism_bcd_done
+:dism_bcd_bios
+bcdboot Z:\Windows /s Z: /f BIOS
+:dism_bcd_done
+set "bcd_rc=%ERRORLEVEL%"
+echo bcdboot_rc=%bcd_rc% >> Y:\setup-result.txt
+if "%bcd_rc%"=="0" goto :dism_bcd_ok
+echo [PATCH] ERROR: bcdboot FAILED with exit code %bcd_rc%. >&2
+echo [PATCH] Halting - NOT rebooting into a possibly dead disk. >&2
+echo [PATCH] Press any key to drop to a command prompt for inspection.
+pause
+exit /b %bcd_rc%
+:dism_bcd_ok
+echo [PATCH] DISM install complete - verifying boot files on the OS partition...
+set "setup_rc=%dism_rc%"
+if "%BootType%"=="bios" goto :check_boot_bios
+goto :check_boot_efi
 
 
 :is_number

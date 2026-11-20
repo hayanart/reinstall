@@ -3757,7 +3757,7 @@ build_extra_cmdline() {
     # https://answers.launchpad.net/ubuntu/+question/249456
     # https://salsa.debian.org/installer-team/rootskel/-/blob/master/src/lib/debian-installer-startup.d/S02module-params?ref_type=heads
     for key in confhome hold force_boot_mode force_cn cloud_image no_cloud_kernel main_disk \
-        force_old_windows_setup no_auto_drivers no_lockout_threshold \
+        force_old_windows_setup use_dism no_auto_drivers no_lockout_threshold \
         elts deb_mirror \
         username ssh_port rdp_port web_port web_path allow_ping; do
         value=${!key}
@@ -5571,6 +5571,10 @@ EOF
         ;;
     --force-old-windows-setup)
         force_old_windows_setup=$2
+        shift 2
+        ;;
+    --use-dism)
+        use_dism=$2
         shift 2
         ;;
     --target-disk)
