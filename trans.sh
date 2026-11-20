@@ -8544,6 +8544,14 @@ EOF
         sed -i 's/UseDism=0/UseDism=1/i' $startnet_cmd
     fi
 
+    # Stage 2 Atlas: tanam script stage-2 ke WinPE + nyalakan flagnya.
+    # Script diambil dari repo yang sama (confhome), sejajar windows-setup.bat.
+    # shellcheck disable=SC2154
+    if [ "$stage2_atlas" = 1 ]; then
+        download $confhome/stage2-atlas.ps1 /wim/stage2-atlas.ps1
+        sed -i 's/Stage2Atlas=0/Stage2Atlas=1/i' $startnet_cmd
+    fi
+
     # Image name for the pre-flight check + dism /Apply-Image /Name.
     # $image_name was already resolved to the real WIM case above.
     # Anchored to the assignment line only, so the placeholder guard

@@ -239,6 +239,7 @@ for %%a in (RAM TPM SecureBoot) do (
 rem 设置
 set ForceOldSetup=0
 set UseDism=0
+set Stage2Atlas=0
 set WimImageName=@image_name@
 set EnableUnattended=1
 set EnableEMS=0
@@ -394,8 +395,48 @@ pause
 exit /b 1
 :boot_ok
 echo [PATCH] Boot files OK. Setup succeeded.
+if "%Stage2Atlas%"=="1" call :plant_stage2
 echo [PATCH] Rebooting into the installed Windows...
 wpeutil reboot
+exit /b 0
+
+:plant_stage2
+rem === PATCH hayanart/reinstall: plant Atlas stage-2 (Stage2Atlas=1) ===
+rem Salin script stage-2 (ditanam trans.sh di WinPE sebagai
+rem X:\stage2-atlas.ps1) ke Windows offline + daftarkan di RunOnce supaya
+rem jalan TERPISAH sebagai administrator saat logon pertama (auto-logon).
+rem Best-effort: gagal di sini TIDAK BOLEH membunuh install - Windows-nya
+rem tetap jadi, hanya langkah playbook Atlas yang terlewat.
+if not exist X:\stage2-atlas.ps1 (
+    echo [PATCH] WARNING: X:\stage2-atlas.ps1 missing - skipping stage 2. >&2
+    echo stage2=missing_script >> Y:\setup-result.txt
+    exit /b 0
+)
+if not exist Z:\Windows\ (
+    echo [PATCH] WARNING: Z:\Windows not found - cannot plant stage 2. >&2
+    echo stage2=no_os_drive >> Y:\setup-result.txt
+    exit /b 0
+)
+if not exist Z:\Atlas\ mkdir Z:\Atlas\
+copy /y X:\stage2-atlas.ps1 Z:\Atlas\stage2-atlas.ps1 >nul
+if errorlevel 1 (
+    echo [PATCH] WARNING: cannot copy stage2 script to Z:\Atlas\. >&2
+    echo stage2=copy_failed >> Y:\setup-result.txt
+    exit /b 0
+)
+reg load HKLM\OFFLINE_SOFTWARE Z:\Windows\System32\config\SOFTWARE >nul 2>nul
+if errorlevel 1 (
+    echo [PATCH] WARNING: cannot load offline SOFTWARE hive for stage 2. >&2
+    echo stage2=hive_load_failed >> Y:\setup-result.txt
+    exit /b 0
+)
+rem RunOnce meluncurkan script secara TERPISAH (cmd /c start) supaya logon
+rem pertama tidak tertahan oleh install Atlas yang lama.
+reg add "HKLM\OFFLINE_SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v AtlasStage2 /t REG_SZ /d "cmd /c start /min powershell -NoProfile -ExecutionPolicy Bypass -File C:\Atlas\stage2-atlas.ps1" /f >nul
+set "s2reg=%ERRORLEVEL%"
+reg unload HKLM\OFFLINE_SOFTWARE >nul 2>nul
+echo stage2=planted reg_rc=%s2reg% >> Y:\setup-result.txt
+if not "%s2reg%"=="0" echo [PATCH] WARNING: RunOnce register returned %s2reg%. >&2
 exit /b 0
 
 
