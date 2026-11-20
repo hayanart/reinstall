@@ -5173,6 +5173,7 @@ target-disk:
 force-boot-mode:
 force-old-windows-setup:
 use-dism:
+stage2-atlas:
 EOF
 }
 
