@@ -8,12 +8,16 @@
 # Yang dipakai di sini semuanya RILIS RESMI (bukan main/beta):
 # - Atlas Playbook v0.5.0-hotfix (.apbx, 48.024.713 byte, SHA256 terverifikasi)
 # - AME Beta v0.8.4 CLI-Standalone.zip (9.548.697 byte, SHA256 terverifikasi)
-# - 7zr.exe (7-Zip console, untuk ekstrak .apbx yang berpassword "malte")
+# - 7zr.exe (7-Zip console minimal, hanya untuk ekstrak .7z) + 7za.exe dari
+#   paket Extra 7-Zip 23.01 (untuk ekstrak .apbx berpassword "malte" -
+#   7zr TIDAK BISA membuka ZIP terenkripsi, exit 2)
 #
 # Opsi playbook (dari playbook.conf Atlas 0.5.0, default yang disarankan):
 #   defender-enable, mitigations-default, auto-updates-disable
 #
-# Versi: 1.0.0 (2026-11-21). Sintaks PowerShell belum dicek mesin (belum ada
+# Versi: 1.0.2 (2026-11-21). v1.0.1: hapus em-dash (parse error). v1.0.2:
+# ekstrak .apbx pakai 7za.exe (7zr gagal buka ZIP terenkripsi). Sintaks
+# PowerShell belum dicek mesin (belum ada
 # host Windows untuk pwsh) - pembuktian lewat live test di VM Windows.
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +38,11 @@ $CliUrl   = 'https://github.com/Ameliorated-LLC/trusted-uninstaller-cli/releases
 $CliSha256 = '70e4946b52c9384ca88730c0dd25646defc63affdef7acadd69cb6317f21825a'
 $CliBytes  = 9548697
 $SevenZrUrl = 'https://www.7-zip.org/a/7zr.exe'
+$ExtraUrl = 'https://www.7-zip.org/a/7z2301-extra.7z'
+$ExtraSha256 = 'db3a1cbe57a26fac81b65c6a2d23feaecdeede3e4c1fe8fb93a7b91d72d1094c'
+$ExtraBytes = 1027828
+$ExtraFile = "$AtlasDir\7z2301-extra.7z"
+$ExtraDir = "$AtlasDir\extra"
 
 $PlaybookOptions = @('defender-enable', 'mitigations-default', 'auto-updates-disable')
 
@@ -99,7 +108,7 @@ try {
 
 try {
     Write-Stage2Status -State 'running' -Message 'stage2 Atlas dimulai'
-    Write-Output '=== stage2-atlas.ps1 v1.0.1 - mulai ==='
+    Write-Output '=== stage2-atlas.ps1 v1.0.2 - mulai ==='
 
     # 1. Tunggu jaringan (maks ~10 menit). Driver NIC sudah dipasang tool,
     # tapi DNS / DHCP kadang butuh beberapa detik setelah boot pertama.
@@ -172,8 +181,19 @@ try {
     Write-Output 'Mengekstrak playbook Atlas ...'
     if (Test-Path $PlaybookDir) { Remove-Item $PlaybookDir -Recurse -Force }
     New-Item -ItemType Directory -Path $PlaybookDir -Force | Out-Null
-    & $SevenZr x "-pmalte" "-o$PlaybookDir" -y $ApbxFile | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "7zr gagal mengekstrak .apbx (exit $LASTEXITCODE)" }
+    # 7zr.exe (minimal) TIDAK BISA membuka ZIP terenkripsi ("Cannot open the
+    # file as archive", exit 2) - pakai 7za.exe lengkap dari paket Extra 7-Zip.
+    Write-Output 'Mengunduh 7z2301-extra.7z ...'
+    Invoke-DownloadWithRetry -Url $ExtraUrl -Dest $ExtraFile -ExpectedBytes $ExtraBytes -ExpectedSha256 $ExtraSha256
+    if (Test-Path $ExtraDir) { Remove-Item $ExtraDir -Recurse -Force }
+    & $SevenZr x "-o$ExtraDir" -y $ExtraFile | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "7zr gagal mengekstrak paket Extra (exit $LASTEXITCODE)" }
+    $SevenZa = "$ExtraDir\x64\7za.exe"
+    if (-not (Test-Path $SevenZa)) { $SevenZa = "$ExtraDir\7za.exe" }
+    if (-not (Test-Path $SevenZa)) { throw '7za.exe tidak ditemukan di paket Extra 7-Zip' }
+    Write-Output "7za ditemukan: $SevenZa"
+    & $SevenZa x "-pmalte" "-o$PlaybookDir" -y $ApbxFile | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "7za gagal mengekstrak .apbx (exit $LASTEXITCODE)" }
     if (-not (Test-Path "$PlaybookDir\playbook.conf")) { throw 'playbook.conf tidak ditemukan setelah ekstrak - .apbx rusak?' }
     Write-Output 'Playbook terekstrak.'
 
