@@ -7179,7 +7179,11 @@ install_windows() {
         rm -f "$install_wim"
         info "Converting install.esd to install.wim (LZMS -> LZX)..."
         echo "Original ESD:  $(get_filesize_mb "$iso_install_wim")"
-        time wimexport --compress=LZX --chunk-size=131072 --threads "$(get_build_threads 512)" "$iso_install_wim" "$iso_image_index" "$install_wim"
+        # JANGAN pakai --chunk-size non-default: wimlib default 32768 (32K).
+        # Chunk 131072 (128K) membuat DISM Microsoft gagal baca header WIM
+        # (Error 11, 0x8007000B) karena software Microsoft tidak mengimplementasikan
+        # chunk non-32768 dengan benar (pernyataan penulis wimlib, Eric Biggers).
+        time wimexport --compress=LZX --threads "$(get_build_threads 512)" "$iso_install_wim" "$iso_image_index" "$install_wim"
         # 只导出了要安装的镜像，因此 image_index 为 1
         image_index=1
         info "install.wim size"
