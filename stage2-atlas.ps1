@@ -1,4 +1,4 @@
-# stage2-atlas.ps1 — AtlasOS 0.5.0 stage-2 installer (proyek RDP Installer)
+# stage2-atlas.ps1 - AtlasOS 0.5.0 stage-2 installer (proyek RDP Installer)
 #
 # Dijalankan TERPISAH (detached) sebagai administrator saat logon pertama,
 # ditanam oleh windows-setup.bat lewat RunOnce (offline registry).
@@ -14,7 +14,7 @@
 #   defender-enable, mitigations-default, auto-updates-disable
 #
 # Versi: 1.0.0 (2026-11-21). Sintaks PowerShell belum dicek mesin (belum ada
-# host Windows untuk pwsh) — pembuktian lewat live test di VM Windows.
+# host Windows untuk pwsh) - pembuktian lewat live test di VM Windows.
 
 $ErrorActionPreference = 'Stop'
 
@@ -93,13 +93,13 @@ function Test-RebootPending {
 try {
     Start-Transcript -Path $LogFile -Append -Force | Out-Null
 } catch {
-    # Transcript gagal (mis. file terkunci) — lanjut tanpa transcript,
+    # Transcript gagal (mis. file terkunci) - lanjut tanpa transcript,
     # Write-Output tetap tercatat bila dijalankan dari console.
 }
 
 try {
     Write-Stage2Status -State 'running' -Message 'stage2 Atlas dimulai'
-    Write-Output '=== stage2-atlas.ps1 v1.0.0 — mulai ==='
+    Write-Output '=== stage2-atlas.ps1 v1.0.1 - mulai ==='
 
     # 1. Tunggu jaringan (maks ~10 menit). Driver NIC sudah dipasang tool,
     # tapi DNS / DHCP kadang butuh beberapa detik setelah boot pertama.
@@ -133,7 +133,7 @@ try {
             -Value 1 -PropertyType DWord -Force | Out-Null
         Write-Output 'OpenSSH Server aktif (port 22).'
     } catch {
-        Write-Output "PERINGATAN: OpenSSH gagal dinyalakan: $($_.Exception.Message) — lanjut tanpa SSH."
+        Write-Output "PERINGATAN: OpenSSH gagal dinyalakan: $($_.Exception.Message) - lanjut tanpa SSH."
     }
 
     # 3. Bila Windows minta reboot (update tertunda), jadwalkan ulang
@@ -141,7 +141,7 @@ try {
     # playbook akan ditolak syarat NoPendingUpdates-nya.
     if (Test-RebootPending) {
         Write-Stage2Status -State 'waiting-reboot' -Message 'reboot pending, dijadwalkan ulang setelah reboot'
-        Write-Output 'Reboot pending terdeteksi — menjadwalkan ulang stage2 lalu reboot.'
+        Write-Output 'Reboot pending terdeteksi - menjadwalkan ulang stage2 lalu reboot.'
         schtasks /create /tn 'AtlasStage2' `
             /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Atlas\stage2-atlas.ps1" `
             /sc onstart /ru SYSTEM /rl highest /f | Out-Null
@@ -174,7 +174,7 @@ try {
     New-Item -ItemType Directory -Path $PlaybookDir -Force | Out-Null
     & $SevenZr x "-pmalte" "-o$PlaybookDir" -y $ApbxFile | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "7zr gagal mengekstrak .apbx (exit $LASTEXITCODE)" }
-    if (-not (Test-Path "$PlaybookDir\playbook.conf")) { throw 'playbook.conf tidak ditemukan setelah ekstrak — .apbx rusak?' }
+    if (-not (Test-Path "$PlaybookDir\playbook.conf")) { throw 'playbook.conf tidak ditemukan setelah ekstrak - .apbx rusak?' }
     Write-Output 'Playbook terekstrak.'
 
     # 6. Terapkan playbook lewat CLI (sebagai administrator; CLI sendiri
@@ -189,7 +189,7 @@ try {
     if (Test-Path "$AtlasDir\cli-out.log") { Get-Content "$AtlasDir\cli-out.log" -Tail 30 | Write-Output }
     if (Test-Path "$AtlasDir\cli-err.log") { Get-Content "$AtlasDir\cli-err.log" -Tail 30 | Write-Output }
 
-    # 7. CLI kadang melepas proses anak lalu keluar duluan — tunggu sampai
+    # 7. CLI kadang melepas proses anak lalu keluar duluan - tunggu sampai
     # tidak ada lagi proses TrustedUninstaller yang jalan (maks 30 menit).
     for ($i = 0; $i -lt 30; $i++) {
         $still = Get-Process -Name 'TrustedUninstaller*' -ErrorAction SilentlyContinue
@@ -214,8 +214,8 @@ try {
         Write-Stage2Status -State 'done' -Message "Atlas 0.5.0 terpasang (CLI exit 0; marker: $($markers -join '; '))"
         Write-Output '=== stage2 Atlas SELESAI (terverifikasi) ==='
     } elseif ($cliRc -eq 0) {
-        Write-Stage2Status -State 'done-unverified' -Message 'CLI exit 0 tapi marker Atlas tidak ditemukan — verifikasi manual via RDP'
-        Write-Output '=== stage2 Atlas selesai tapi TANPA marker — cek manual via RDP ==='
+        Write-Stage2Status -State 'done-unverified' -Message 'CLI exit 0 tapi marker Atlas tidak ditemukan - verifikasi manual via RDP'
+        Write-Output '=== stage2 Atlas selesai tapi TANPA marker - cek manual via RDP ==='
     } else {
         throw "TrustedUninstaller CLI gagal (exit $cliRc). Lihat cli-out.log / cli-err.log."
     }
