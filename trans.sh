@@ -6890,6 +6890,13 @@ install_windows() {
         )
     fi
 
+    # MiniOS 等精简版 iso 用 install.esd (LZMS)，DISM/挂载流程只认 WIM：
+    # 像 swm 一样先把选中的映像导出成 install.wim 再继续
+    is_esd=false
+    if [[ $(echo "$source_install_wim" | to_lower) = '*.esd' ]]; then
+        is_esd=true
+    fi
+
     # 防止用了不兼容架构的 iso
     boot_index=$(get_wim_prop "/iso/$sources_boot_wim" 'Boot Index')
     arch_wim=$(get_image_prop "/iso/$sources_boot_wim" "$boot_index" 'Architecture' | to_lower)
@@ -7163,6 +7170,22 @@ install_windows() {
         wimexport --ref="$(dirname "$iso_install_wim")/$swm_ref" "$iso_install_wim" "$iso_image_index" "$install_wim"
         # 只导出了要安装的镜像，因此 image_index 为 1
         image_index=1
+    elif $is_esd; then
+        # install.esd (LZMS) 先导出成 install.wim (LZX) 才能编辑/让 DISM 安装。
+        # DISM /Apply-Image 只对 WIM 可靠；ESD 原样复制会导致 WinPE 阶段无声失败
+        # (MiniOS: DISM 在 WinPE 挂 ~57 分钟，RDP 从未起来)。
+        install_wim=$(echo "$install_wim" | sed 's/\.esd$/.wim/i')
+        # 防止不格盘二次运行时报错：文件已存在
+        rm -f "$install_wim"
+        info "Converting install.esd to install.wim (LZMS -> LZX)..."
+        echo "Original ESD:  $(get_filesize_mb "$iso_install_wim")"
+        time wimexport --compress=LZX --chunk-size=131072 --threads "$(get_build_threads 512)" "$iso_install_wim" "$iso_image_index" "$install_wim"
+        # 只导出了要安装的镜像，因此 image_index 为 1
+        image_index=1
+        info "install.wim size"
+        echo "Original ESD:  $(get_filesize_mb "$iso_install_wim")"
+        echo "Converted WIM: $(get_filesize_mb "$install_wim")"
+        echo
     elif false; then
         # 优化 install.wim
         # 优点: 可以节省 200M~600M 空间，用来创建虚拟内存
