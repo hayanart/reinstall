@@ -241,6 +241,7 @@ set ForceOldSetup=0
 set UseDism=0
 set Stage2Atlas=0
 set WimImageName=@image_name@
+set WimImageIndex=@image_index@
 set EnableUnattended=1
 set EnableEMS=0
 
@@ -316,31 +317,34 @@ if not exist Y:\sources\install.wim set "wimfile=Y:\sources\install.esd"
 echo [PATCH] Pre-flight OK: install source found.
 dism /Get-ImageInfo /ImageFile:%wimfile% > X:\wiminfo.txt 2>nul
 find /i "Index :" X:\wiminfo.txt >nul 2>nul
-if errorlevel 1 goto :wiminfo_skip
-if "%WimImageName%"=="@image_name@" (
-    echo [PATCH] FATAL: image name placeholder was not replaced by trans.sh - cannot verify image. >&2
+if errorlevel 1 (
+    echo [PATCH] WARNING: could not read image info - index check skipped. >&2
+    goto :wiminfo_skip
+)
+if "%WimImageIndex%"=="@image_index@" (
+    echo [PATCH] FATAL: image index placeholder was not replaced by trans.sh - cannot verify image. >&2
     echo [PATCH] Halting - setup.exe will NOT run. >&2
     echo [PATCH] Press any key to drop to a command prompt for inspection.
     pause
     exit /b 1
 )
-if "%WimImageName%"=="" (
-    echo [PATCH] FATAL: image name is empty - cannot verify image. >&2
+if "%WimImageIndex%"=="" (
+    echo [PATCH] FATAL: image index is empty - cannot verify image. >&2
     echo [PATCH] Halting - setup.exe will NOT run. >&2
     echo [PATCH] Press any key to drop to a command prompt for inspection.
     pause
     exit /b 1
 )
-find /i "%WimImageName%" X:\wiminfo.txt >nul 2>nul
+find /i "Index : %WimImageIndex%" X:\wiminfo.txt >nul 2>nul
 if not errorlevel 1 goto :wiminfo_ok
-echo [PATCH] FATAL: image name not found in install.wim - see X:\wiminfo.txt >&2
+echo [PATCH] FATAL: image index %WimImageIndex% not found in install.wim - see X:\wiminfo.txt >&2
 type X:\wiminfo.txt >&2
 echo [PATCH] Halting - setup.exe will NOT run. >&2
 echo [PATCH] Press any key to drop to a command prompt for inspection.
 pause
 exit /b 1
 :wiminfo_ok
-echo [PATCH] Image name verified in install.wim.
+echo [PATCH] Image index %WimImageIndex% verified in install.wim.
 :wiminfo_skip
 if exist X:\wiminfo.txt del X:\wiminfo.txt
 rem DISM bypass: skip setup.exe entirely when UseDism=1 (set by trans.sh
@@ -469,7 +473,7 @@ if not exist Z:\ (
 )
 echo [PATCH] Applying image with DISM - this takes several minutes...
 echo on
-dism /Apply-Image /ImageFile:%wimfile% /Name:"%WimImageName%" /ApplyDir:Z:\
+dism /Apply-Image /ImageFile:%wimfile% /Index:%WimImageIndex% /ApplyDir:Z:\
 set "dism_rc=%ERRORLEVEL%"
 @echo off
 echo.

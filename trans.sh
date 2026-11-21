@@ -8579,13 +8579,26 @@ EOF
         sed -i 's/Stage2Atlas=0/Stage2Atlas=1/i' $startnet_cmd
     fi
 
-    # Image name for the pre-flight check + dism /Apply-Image /Name.
+    # Image name for display/logging only (echo + setup-result.txt).
+    # Pre-flight + DISM apply are index-based now: DISM /Get-ImageInfo
+    # shows <DISPLAYNAME> as "Name :", which may differ from wimlib
+    # <NAME> (MiniOS: "MiniOS11 LTSC + Toolkit" vs "Windows 11
+    # Enterprise LTSC 2024"), so name matching fails there.
     # $image_name was already resolved to the real WIM case above.
     # Anchored to the assignment line only, so the placeholder guard
     # elsewhere in windows-setup.bat is left alone.
     if [ -n "$image_name" ]; then
         image_name_esc=$(printf '%s' "$image_name" | sed -e 's/[&|\\]/\\&/g')
         sed -i "s|^set WimImageName=@image_name@|set WimImageName=$image_name_esc|" $startnet_cmd
+    fi
+
+    # Image index for the pre-flight check + dism /Apply-Image /Index.
+    # $image_index is the index of the selected image in the installer
+    # WIM (1 after SWM/ESD export, $iso_image_index for a plain WIM copy).
+    # Anchored to the assignment line only, so the placeholder guard
+    # elsewhere in windows-setup.bat is left alone.
+    if [ -n "$image_index" ]; then
+        sed -i "s|^set WimImageIndex=@image_index@|set WimImageIndex=$image_index|" $startnet_cmd
     fi
 
     # shellcheck disable=SC2154
