@@ -15,17 +15,22 @@
 # Opsi playbook (dari playbook.conf Atlas 0.5.0, default yang disarankan):
 #   defender-enable, mitigations-default, auto-updates-disable
 #
-# Versi: 1.0.5 (2026-11-24). v1.0.1: hapus em-dash (parse error). v1.0.2:
+# Versi: 1.0.6 (2026-11-24). v1.0.1: hapus em-dash (parse error). v1.0.2:
 # ekstrak .apbx pakai 7za.exe (7zr gagal buka ZIP terenkripsi). v1.0.3:
 # DIBATALKAN (draft matikan-Defender otomatis, dihentikan classifier,
-# tidak pernah di-push). v1.0.4: daftarkan tugas SYSTEM on-start sebelum
-# CLI jalan (resume setelah restart prepare CLI); hapus tugas saat status
-# akhir done/failed. v1.0.5: batasi siklus reboot-pending maks 3 - flag CBS
-# yang ditinggal DISM tidak pernah bersih oleh reboot biasa (e2e #3: 35x
-# waiting-reboot); setelah batas, lanjut dan biarkan CLI yang memutuskan
-# (syarat NoPendingUpdates), dicatat jelas di status + log. Sintaks
-# PowerShell belum dicek mesin (belum ada host Windows untuk pwsh) -
-# pembuktian lewat live test di VM Windows.
+# tidak pernah di-push) - NAMA INI JANGAN DIPAKAI LAGI. v1.0.4: daftarkan
+# tugas SYSTEM on-start sebelum CLI jalan (resume setelah restart prepare
+# CLI); hapus tugas saat status akhir done/failed. v1.0.5: batasi siklus
+# reboot-pending maks 3 - flag CBS yang ditinggal DISM tidak pernah bersih
+# oleh reboot biasa (e2e #3: 35x waiting-reboot); setelah batas, lanjut
+# dan biarkan CLI yang memutuskan (syarat NoPendingUpdates), dicatat jelas
+# di status + log. v1.0.6: WATCHDOG-ONLY - CLI dijalankan sebagai child
+# process yang diawasi; bila CLI diam di gerbang keypress (toggle Defender
+# / prepare) tanpa progres 15 menit, watchdog menghentikan CLI dan menulis
+# status akhir failed dengan alasan jelas. TIDAK ADA otomasi Defender di
+# versi ini (tidak ada registry/Set-MpPreference/toggle/pengalihan stdin)
+# - toggle tetap manual. Sintaks PowerShell belum dicek mesin (belum ada
+# host Windows untuk pwsh) - pembuktian lewat live test di VM Windows.
 
 $ErrorActionPreference = 'Stop'
 
@@ -39,6 +44,10 @@ $ApbxFile   = "$AtlasDir\AtlasPlaybook_v0.5.0-hotfix.apbx"
 $PlaybookDir = "$AtlasDir\playbook"
 $RebootCountFile = "$AtlasDir\stage2.reboot-count"
 $MaxRebootCycles = 3
+# Watchdog (v1.0.6): batas diam CLI di gerbang keypress (toggle/prepare)
+# dan batas diam tanpa progres sama sekali. Hanya pengawasan eksternal.
+$WatchdogGateMinutes = 15
+$WatchdogStallMinutes = 30
 
 $ApbxUrl  = 'https://github.com/Atlas-OS/Atlas/releases/download/0.5.0-hotfix/AtlasPlaybook_v0.5.0-hotfix.apbx'
 $ApbxSha256 = '13c4d8e7fc0ed38c37c5942ebcabf7f636389972e6de391a192ae649967602d8'
@@ -147,7 +156,7 @@ try {
 
 try {
     Write-Stage2Status -State 'running' -Message 'stage2 Atlas dimulai'
-    Write-Output '=== stage2-atlas.ps1 v1.0.5 - mulai ==='
+    Write-Output '=== stage2-atlas.ps1 v1.0.6 - mulai ==='
 
     # 1. Tunggu jaringan (maks ~10 menit). Driver NIC sudah dipasang tool,
     # tapi DNS / DHCP kadang butuh beberapa detik setelah boot pertama.
@@ -263,8 +272,51 @@ try {
     # ulang script setelah boot. Dihapus saat status akhir ditulis.
     Register-ResumeTask
     $cliArgs = @($PlaybookDir) + $PlaybookOptions
-    $proc = Start-Process -FilePath $CliExe -ArgumentList $cliArgs -Wait -PassThru -NoNewWindow `
+    # WATCHDOG (v1.0.6, HANYA pengawasan eksternal - TIDAK ADA otomasi
+    # Defender di sini: tidak ada tulis registry Defender, tidak ada
+    # Set-MpPreference, tidak ada toggle, tidak ada pengalihan stdin).
+    # CLI dijalankan sebagai child process yang diawasi; script memantau
+    # cli-out.log. CLI menunggu keypress di dua gerbang (toggle Defender
+    # dan prepare) - tanpa manusia, gerbang itu tidak pernah lewat, jadi
+    # bila log tidak berubah selama $WatchdogGateMinutes menit SETELAH
+    # pesan gerbang muncul, watchdog menghentikan CLI dan menulis status
+    # akhir failed dengan alasan jelas (bukan ngegantung berjam-jam).
+    # Bila log diam $WatchdogStallMinutes menit tanpa pesan gerbang pun,
+    # itu juga dianggap hang dan dihentikan dengan alasan sendiri.
+    $proc = Start-Process -FilePath $CliExe -ArgumentList $cliArgs -PassThru -NoNewWindow `
         -RedirectStandardOutput "$AtlasDir\cli-out.log" -RedirectStandardError "$AtlasDir\cli-err.log"
+    $cliOutLog = "$AtlasDir\cli-out.log"
+    $lastLogLength = -1
+    $lastProgressUtc = (Get-Date).ToUniversalTime()
+    $gateKind = ''
+    while (-not $proc.HasExited) {
+        Start-Sleep -Seconds 60
+        if (Test-Path $cliOutLog) {
+            $len = (Get-Item $cliOutLog).Length
+            if ($len -ne $lastLogLength) { $lastLogLength = $len; $lastProgressUtc = (Get-Date).ToUniversalTime() }
+            if ($gateKind -eq '') {
+                $tail = Get-Content $cliOutLog -Tail 30 -ErrorAction SilentlyContinue
+                if ($tail -match 'toggles must be set to off') { $gateKind = 'toggle' }
+                elseif ($tail -match 'must be prepared before continuing') { $gateKind = 'prepare' }
+            }
+        }
+        $quietMinutes = ((Get-Date).ToUniversalTime() - $lastProgressUtc).TotalMinutes
+        if ($gateKind -eq 'toggle' -and $quietMinutes -ge $WatchdogGateMinutes) {
+            Write-Output "WATCHDOG: CLI diam di gerbang toggle Defender selama $([int]$quietMinutes) menit - menghentikan CLI."
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+            throw 'Watchdog: CLI menunggu di gerbang toggle Defender (4 toggle Windows Security masih ON) selama 15 menit tanpa progres - matikan 4 toggle secara manual + tekan Enter via RDP, lalu jalankan ulang stage2. Playbook TIDAK diterapkan.'
+        }
+        if ($gateKind -eq 'prepare' -and $quietMinutes -ge $WatchdogGateMinutes) {
+            Write-Output "WATCHDOG: CLI diam di gerbang prepare selama $([int]$quietMinutes) menit - menghentikan CLI."
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+            throw 'Watchdog: CLI menunggu di gerbang prepare (tekan tombol untuk restart) selama 15 menit tanpa progres - tekan Enter via RDP atau jalankan ulang stage2. Playbook TIDAK diterapkan.'
+        }
+        if ($gateKind -eq '' -and $quietMinutes -ge $WatchdogStallMinutes) {
+            Write-Output "WATCHDOG: CLI tidak ada progres selama $([int]$quietMinutes) menit - menghentikan CLI."
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+            throw 'Watchdog: CLI tidak ada progres (cli-out.log tidak berubah) selama 30 menit - kemungkinan hang. Lihat cli-out.log / cli-err.log via RDP. Playbook TIDAK diterapkan.'
+        }
+    }
     $cliRc = $proc.ExitCode
     Write-Output "CLI selesai, exit code $cliRc."
     if (Test-Path "$AtlasDir\cli-out.log") { Get-Content "$AtlasDir\cli-out.log" -Tail 30 | Write-Output }
