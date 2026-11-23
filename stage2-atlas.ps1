@@ -15,13 +15,17 @@
 # Opsi playbook (dari playbook.conf Atlas 0.5.0, default yang disarankan):
 #   defender-enable, mitigations-default, auto-updates-disable
 #
-# Versi: 1.0.4 (2026-11-23). v1.0.1: hapus em-dash (parse error). v1.0.2:
+# Versi: 1.0.5 (2026-11-24). v1.0.1: hapus em-dash (parse error). v1.0.2:
 # ekstrak .apbx pakai 7za.exe (7zr gagal buka ZIP terenkripsi). v1.0.3:
 # DIBATALKAN (draft matikan-Defender otomatis, dihentikan classifier,
 # tidak pernah di-push). v1.0.4: daftarkan tugas SYSTEM on-start sebelum
 # CLI jalan (resume setelah restart prepare CLI); hapus tugas saat status
-# akhir done/failed. Sintaks PowerShell belum dicek mesin (belum ada
-# host Windows untuk pwsh) - pembuktian lewat live test di VM Windows.
+# akhir done/failed. v1.0.5: batasi siklus reboot-pending maks 3 - flag CBS
+# yang ditinggal DISM tidak pernah bersih oleh reboot biasa (e2e #3: 35x
+# waiting-reboot); setelah batas, lanjut dan biarkan CLI yang memutuskan
+# (syarat NoPendingUpdates), dicatat jelas di status + log. Sintaks
+# PowerShell belum dicek mesin (belum ada host Windows untuk pwsh) -
+# pembuktian lewat live test di VM Windows.
 
 $ErrorActionPreference = 'Stop'
 
@@ -33,6 +37,8 @@ $CliZip     = "$AtlasDir\CLI-Standalone.zip"
 $CliDir     = "$AtlasDir\cli"
 $ApbxFile   = "$AtlasDir\AtlasPlaybook_v0.5.0-hotfix.apbx"
 $PlaybookDir = "$AtlasDir\playbook"
+$RebootCountFile = "$AtlasDir\stage2.reboot-count"
+$MaxRebootCycles = 3
 
 $ApbxUrl  = 'https://github.com/Atlas-OS/Atlas/releases/download/0.5.0-hotfix/AtlasPlaybook_v0.5.0-hotfix.apbx'
 $ApbxSha256 = '13c4d8e7fc0ed38c37c5942ebcabf7f636389972e6de391a192ae649967602d8'
@@ -103,6 +109,23 @@ function Remove-ResumeTask {
     try { schtasks /delete /tn 'AtlasStage2' /f 2>$null | Out-Null } catch { }
 }
 
+function Get-RebootCycleCount {
+    # Hitung berapa kali script ini sudah reboot karena reboot-pending.
+    # Disimpan di file agar bertahan melewati reboot. Gagal baca = 0.
+    try {
+        if (Test-Path $RebootCountFile) {
+            $n = [int]((Get-Content -Path $RebootCountFile -TotalCount 1).Trim())
+            if ($n -ge 0) { return $n }
+        }
+    } catch { }
+    return 0
+}
+
+function Set-RebootCycleCount {
+    param([int]$Count)
+    try { "$Count" | Set-Content -Path $RebootCountFile -Encoding ascii -Force } catch { }
+}
+
 function Test-RebootPending {
     # Gabungan flag reboot pending yang umum (CBS + Windows Update).
     $paths = @(
@@ -124,7 +147,7 @@ try {
 
 try {
     Write-Stage2Status -State 'running' -Message 'stage2 Atlas dimulai'
-    Write-Output '=== stage2-atlas.ps1 v1.0.4 - mulai ==='
+    Write-Output '=== stage2-atlas.ps1 v1.0.5 - mulai ==='
 
     # 1. Tunggu jaringan (maks ~10 menit). Driver NIC sudah dipasang tool,
     # tapi DNS / DHCP kadang butuh beberapa detik setelah boot pertama.
@@ -164,14 +187,34 @@ try {
     # 3. Bila Windows minta reboot (update tertunda), jadwalkan ulang
     # script ini sebagai tugas terjadwal SYSTEM lalu reboot. Tanpa ini,
     # playbook akan ditolak syarat NoPendingUpdates-nya.
+    # BATAS SIKLUS (v1.0.5): flag CBS RebootPending yang ditinggal DISM
+    # saat apply image TIDAK PERNAH bersih oleh reboot biasa - e2e #3
+    # terjebak 35x waiting-reboot (tiap siklus ~23 menit, SSH mati).
+    # Karena itu siklus reboot DIBATASI maks $MaxRebootCycles kali; setelah
+    # batas, script LANJUT dan membiarkan CLI yang memutuskan (syarat
+    # NoPendingUpdates-nya) - dicatat jelas di status + log sebagai
+    # STALE-PERSISTENT, bukan dihapus diam-diam. Bila flag bersih,
+    # hitungan direset ke 0.
     if (Test-RebootPending) {
-        Write-Stage2Status -State 'waiting-reboot' -Message 'reboot pending, dijadwalkan ulang setelah reboot'
-        Write-Output 'Reboot pending terdeteksi - menjadwalkan ulang stage2 lalu reboot.'
-        Register-ResumeTask
-        shutdown /r /t 10 /c 'Atlas stage2: reboot untuk update tertunda' | Out-Null
-        Write-Output 'Reboot dijadwalkan (10 detik).'
-        try { Stop-Transcript | Out-Null } catch { }
-        exit 0
+        $rebootCycles = (Get-RebootCycleCount) + 1
+        if ($rebootCycles -ge $MaxRebootCycles) {
+            Set-RebootCycleCount -Count $rebootCycles
+            $staleMsg = "flag reboot-pending STALE-PERSISTENT setelah $rebootCycles siklus reboot (kemungkinan sisa DISM) - lanjut, CLI yang memutuskan (syarat NoPendingUpdates)"
+            Write-Stage2Status -State 'running' -Message $staleMsg
+            Write-Output "PERINGATAN: $staleMsg"
+            Write-Output 'Batas siklus reboot tercapai - TIDAK reboot lagi, lanjut ke unduhan/CLI.'
+        } else {
+            Set-RebootCycleCount -Count $rebootCycles
+            Write-Stage2Status -State 'waiting-reboot' -Message "reboot pending, dijadwalkan ulang setelah reboot (siklus $rebootCycles/$MaxRebootCycles)"
+            Write-Output "Reboot pending terdeteksi (siklus $rebootCycles/$MaxRebootCycles) - menjadwalkan ulang stage2 lalu reboot."
+            Register-ResumeTask
+            shutdown /r /t 10 /c 'Atlas stage2: reboot untuk update tertunda' | Out-Null
+            Write-Output 'Reboot dijadwalkan (10 detik).'
+            try { Stop-Transcript | Out-Null } catch { }
+            exit 0
+        }
+    } else {
+        Set-RebootCycleCount -Count 0
     }
 
     # 4. Unduh 7zr + CLI + playbook (dengan verifikasi ukuran + SHA256).
