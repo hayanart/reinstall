@@ -3003,6 +3003,12 @@ save_password() {
 
         base64=$(printf '%s' "${password}AdministratorPassword" | iconv -f UTF-8 -t UTF-16LE | base64 -w 0 | grep .)
         echo "$base64" >"$dir/password-windows-administrator-base64"
+
+        # AutoLogon 必须用 Password 后缀，不能用 AdministratorPassword：
+        # Windows 会把 Value 解码后去掉结尾的 "Password"，用 AdministratorPassword
+        # 会导致自动登录用 "<password>Administrator" 而失败
+        base64=$(printf '%s' "${password}Password" | iconv -f UTF-8 -t UTF-16LE | base64 -w 0 | grep .)
+        echo "$base64" >"$dir/password-windows-autologon-base64"
     fi
 }
 

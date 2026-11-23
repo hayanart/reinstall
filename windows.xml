@@ -150,10 +150,12 @@
         <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="%arch%" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <!-- AutoLogon (1x): first logon as Administrator so the RunOnce
                  stage-2 runs unattended. Removed by trans.sh for non-admin
+                 NOTE: Value MUST be %autologon_password% (password + "Password" suffix);
+                 %administrator_password% would make Windows strip trailing "Password" and try password + "Administrator".
                  accounts. Fix e2e Atlas 2026-11-23 (missing auto-logon). -->
             <AutoLogon>
                 <Password>
-                    <Value>%administrator_password%</Value>
+                    <Value>%autologon_password%</Value>
                     <PlainText>false</PlainText>
                 </Password>
                 <Enabled>true</Enabled>

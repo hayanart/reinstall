@@ -758,6 +758,10 @@ get_password_windows_administrator_base64() {
     get_config password-windows-administrator-base64
 }
 
+get_password_windows_autologon_base64() {
+    get_config password-windows-autologon-base64
+}
+
 get_password_windows_user_base64() {
     get_config password-windows-user-base64
 }
@@ -8431,12 +8435,14 @@ EOF
     if is_administrator_username "$username"; then
         # Administrator
         password_base64=$(get_password_windows_administrator_base64)
+        autologon_base64=$(get_password_windows_autologon_base64)
         xmlstarlet ed -L -N x="urn:schemas-microsoft-com:unattend" \
             -d "//x:LocalAccounts" \
             /tmp/autounattend.xml
         sed -i \
             -e "s|%enable_administrator%|1|gi" \
             -e "s|%administrator_password%|$password_base64|gi" \
+            -e "s|%autologon_password%|$autologon_base64|gi" \
             /tmp/autounattend.xml
     else
         # 普通账号
