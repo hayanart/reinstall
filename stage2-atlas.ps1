@@ -1,4 +1,4 @@
-# stage2-atlas.ps1 - AtlasOS 0.5.0 stage-2 installer (proyek RDP Installer)
+﻿# stage2-atlas.ps1 - AtlasOS 0.5.0 stage-2 installer (proyek RDP Installer)
 #
 # Dijalankan TERPISAH (detached) sebagai administrator saat logon pertama,
 # ditanam oleh windows-setup.bat lewat RunOnce (offline registry).
@@ -15,9 +15,12 @@
 # Opsi playbook (dari playbook.conf Atlas 0.5.0, default yang disarankan):
 #   defender-enable, mitigations-default, auto-updates-disable
 #
-# Versi: 1.0.2 (2026-11-21). v1.0.1: hapus em-dash (parse error). v1.0.2:
-# ekstrak .apbx pakai 7za.exe (7zr gagal buka ZIP terenkripsi). Sintaks
-# PowerShell belum dicek mesin (belum ada
+# Versi: 1.0.4 (2026-11-23). v1.0.1: hapus em-dash (parse error). v1.0.2:
+# ekstrak .apbx pakai 7za.exe (7zr gagal buka ZIP terenkripsi). v1.0.3:
+# DIBATALKAN (draft matikan-Defender otomatis, dihentikan classifier,
+# tidak pernah di-push). v1.0.4: daftarkan tugas SYSTEM on-start sebelum
+# CLI jalan (resume setelah restart prepare CLI); hapus tugas saat status
+# akhir done/failed. Sintaks PowerShell belum dicek mesin (belum ada
 # host Windows untuk pwsh) - pembuktian lewat live test di VM Windows.
 
 $ErrorActionPreference = 'Stop'
@@ -87,6 +90,19 @@ function Invoke-DownloadWithRetry {
     }
 }
 
+function Register-ResumeTask {
+    # Daftarkan ulang script ini sebagai tugas SYSTEM saat startup, agar
+    # script jalan lagi setelah reboot (mis. restart yang dipicu CLI di
+    # gerbang prepare). Tugas dihapus saat status akhir ditulis.
+    schtasks /create /tn 'AtlasStage2' `
+        /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Atlas\stage2-atlas.ps1" `
+        /sc onstart /ru SYSTEM /rl highest /f | Out-Null
+}
+
+function Remove-ResumeTask {
+    try { schtasks /delete /tn 'AtlasStage2' /f 2>$null | Out-Null } catch { }
+}
+
 function Test-RebootPending {
     # Gabungan flag reboot pending yang umum (CBS + Windows Update).
     $paths = @(
@@ -108,7 +124,7 @@ try {
 
 try {
     Write-Stage2Status -State 'running' -Message 'stage2 Atlas dimulai'
-    Write-Output '=== stage2-atlas.ps1 v1.0.2 - mulai ==='
+    Write-Output '=== stage2-atlas.ps1 v1.0.4 - mulai ==='
 
     # 1. Tunggu jaringan (maks ~10 menit). Driver NIC sudah dipasang tool,
     # tapi DNS / DHCP kadang butuh beberapa detik setelah boot pertama.
@@ -151,9 +167,7 @@ try {
     if (Test-RebootPending) {
         Write-Stage2Status -State 'waiting-reboot' -Message 'reboot pending, dijadwalkan ulang setelah reboot'
         Write-Output 'Reboot pending terdeteksi - menjadwalkan ulang stage2 lalu reboot.'
-        schtasks /create /tn 'AtlasStage2' `
-            /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Atlas\stage2-atlas.ps1" `
-            /sc onstart /ru SYSTEM /rl highest /f | Out-Null
+        Register-ResumeTask
         shutdown /r /t 10 /c 'Atlas stage2: reboot untuk update tertunda' | Out-Null
         Write-Output 'Reboot dijadwalkan (10 detik).'
         try { Stop-Transcript | Out-Null } catch { }
@@ -201,6 +215,10 @@ try {
     # yang menaikkan ke TrustedInstaller lewat broker-nya).
     Write-Stage2Status -State 'running' -Message 'TrustedUninstaller CLI sedang menerapkan playbook Atlas'
     Write-Output "Menjalankan CLI: $CliExe `"$PlaybookDir`" $($PlaybookOptions -join ' ')"
+    # Daftarkan tugas resume SEBELUM CLI jalan: restart yang dipicu CLI
+    # (gerbang prepare) membunuh script + CLI; tugas ini menjalankan
+    # ulang script setelah boot. Dihapus saat status akhir ditulis.
+    Register-ResumeTask
     $cliArgs = @($PlaybookDir) + $PlaybookOptions
     $proc = Start-Process -FilePath $CliExe -ArgumentList $cliArgs -Wait -PassThru -NoNewWindow `
         -RedirectStandardOutput "$AtlasDir\cli-out.log" -RedirectStandardError "$AtlasDir\cli-err.log"
@@ -231,9 +249,11 @@ try {
     }
     Write-Output "Marker Atlas ditemukan: $($markers -join '; ')"
     if ($cliRc -eq 0 -and $markers.Count -gt 0) {
+        Remove-ResumeTask
         Write-Stage2Status -State 'done' -Message "Atlas 0.5.0 terpasang (CLI exit 0; marker: $($markers -join '; '))"
         Write-Output '=== stage2 Atlas SELESAI (terverifikasi) ==='
     } elseif ($cliRc -eq 0) {
+        Remove-ResumeTask
         Write-Stage2Status -State 'done-unverified' -Message 'CLI exit 0 tapi marker Atlas tidak ditemukan - verifikasi manual via RDP'
         Write-Output '=== stage2 Atlas selesai tapi TANPA marker - cek manual via RDP ==='
     } else {
@@ -242,6 +262,7 @@ try {
 } catch {
     $msg = $_.Exception.Message
     Write-Output "ERROR stage2: $msg"
+    Remove-ResumeTask
     Write-Stage2Status -State 'failed' -Message $msg
     try { Stop-Transcript | Out-Null } catch { }
     exit 1

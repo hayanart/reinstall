@@ -8443,6 +8443,7 @@ EOF
         password_base64=$(get_password_windows_user_base64)
         xmlstarlet ed -L -N x="urn:schemas-microsoft-com:unattend" \
             -d "//x:AdministratorPassword" \
+            -d "//x:AutoLogon" \
             /tmp/autounattend.xml
         sed -i \
             -e "s|%enable_administrator%|0|gi" \
