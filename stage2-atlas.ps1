@@ -15,7 +15,7 @@
 # Opsi playbook (dari playbook.conf Atlas 0.5.0, default yang disarankan):
 #   defender-enable, mitigations-default, auto-updates-disable
 #
-# Versi: 1.0.6 (2026-11-24). v1.0.1: hapus em-dash (parse error). v1.0.2:
+# Versi: 1.0.7 (2026-11-24). v1.0.1: hapus em-dash (parse error). v1.0.2:
 # ekstrak .apbx pakai 7za.exe (7zr gagal buka ZIP terenkripsi). v1.0.3:
 # DIBATALKAN (draft matikan-Defender otomatis, dihentikan classifier,
 # tidak pernah di-push) - NAMA INI JANGAN DIPAKAI LAGI. v1.0.4: daftarkan
@@ -29,7 +29,10 @@
 # / prepare) tanpa progres 15 menit, watchdog menghentikan CLI dan menulis
 # status akhir failed dengan alasan jelas. TIDAK ADA otomasi Defender di
 # versi ini (tidak ada registry/Set-MpPreference/toggle/pengalihan stdin)
-# - toggle tetap manual. Sintaks PowerShell belum dicek mesin (belum ada
+# - toggle tetap manual. v1.0.7: jendela watchdog gerbang 15 -> 45 menit
+# (e2e #6: latensi notifikasi + SSH mati memakan ~10 menit, Hyan hanya
+# kebagian ~5 menit dari 15) - $WatchdogStallMinutes tetap 30.
+# Sintaks PowerShell belum dicek mesin (belum ada
 # host Windows untuk pwsh) - pembuktian lewat live test di VM Windows.
 
 $ErrorActionPreference = 'Stop'
@@ -44,9 +47,9 @@ $ApbxFile   = "$AtlasDir\AtlasPlaybook_v0.5.0-hotfix.apbx"
 $PlaybookDir = "$AtlasDir\playbook"
 $RebootCountFile = "$AtlasDir\stage2.reboot-count"
 $MaxRebootCycles = 3
-# Watchdog (v1.0.6): batas diam CLI di gerbang keypress (toggle/prepare)
+# Watchdog (v1.0.7): batas diam CLI di gerbang keypress (toggle/prepare)
 # dan batas diam tanpa progres sama sekali. Hanya pengawasan eksternal.
-$WatchdogGateMinutes = 15
+$WatchdogGateMinutes = 45
 $WatchdogStallMinutes = 30
 
 $ApbxUrl  = 'https://github.com/Atlas-OS/Atlas/releases/download/0.5.0-hotfix/AtlasPlaybook_v0.5.0-hotfix.apbx'
@@ -156,7 +159,7 @@ try {
 
 try {
     Write-Stage2Status -State 'running' -Message 'stage2 Atlas dimulai'
-    Write-Output '=== stage2-atlas.ps1 v1.0.6 - mulai ==='
+    Write-Output '=== stage2-atlas.ps1 v1.0.7 - mulai ==='
 
     # 1. Tunggu jaringan (maks ~10 menit). Driver NIC sudah dipasang tool,
     # tapi DNS / DHCP kadang butuh beberapa detik setelah boot pertama.
@@ -272,7 +275,7 @@ try {
     # ulang script setelah boot. Dihapus saat status akhir ditulis.
     Register-ResumeTask
     $cliArgs = @($PlaybookDir) + $PlaybookOptions
-    # WATCHDOG (v1.0.6, HANYA pengawasan eksternal - TIDAK ADA otomasi
+    # WATCHDOG (v1.0.7, HANYA pengawasan eksternal - TIDAK ADA otomasi
     # Defender di sini: tidak ada tulis registry Defender, tidak ada
     # Set-MpPreference, tidak ada toggle, tidak ada pengalihan stdin).
     # CLI dijalankan sebagai child process yang diawasi; script memantau
@@ -304,12 +307,12 @@ try {
         if ($gateKind -eq 'toggle' -and $quietMinutes -ge $WatchdogGateMinutes) {
             Write-Output "WATCHDOG: CLI diam di gerbang toggle Defender selama $([int]$quietMinutes) menit - menghentikan CLI."
             try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
-            throw 'Watchdog: CLI menunggu di gerbang toggle Defender (4 toggle Windows Security masih ON) selama 15 menit tanpa progres - matikan 4 toggle secara manual + tekan Enter via RDP, lalu jalankan ulang stage2. Playbook TIDAK diterapkan.'
+            throw 'Watchdog: CLI menunggu di gerbang toggle Defender (4 toggle Windows Security masih ON) selama 45 menit tanpa progres - matikan 4 toggle secara manual + tekan Enter via RDP, lalu jalankan ulang stage2. Playbook TIDAK diterapkan.'
         }
         if ($gateKind -eq 'prepare' -and $quietMinutes -ge $WatchdogGateMinutes) {
             Write-Output "WATCHDOG: CLI diam di gerbang prepare selama $([int]$quietMinutes) menit - menghentikan CLI."
             try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
-            throw 'Watchdog: CLI menunggu di gerbang prepare (tekan tombol untuk restart) selama 15 menit tanpa progres - tekan Enter via RDP atau jalankan ulang stage2. Playbook TIDAK diterapkan.'
+            throw 'Watchdog: CLI menunggu di gerbang prepare (tekan tombol untuk restart) selama 45 menit tanpa progres - tekan Enter via RDP atau jalankan ulang stage2. Playbook TIDAK diterapkan.'
         }
         if ($gateKind -eq '' -and $quietMinutes -ge $WatchdogStallMinutes) {
             Write-Output "WATCHDOG: CLI tidak ada progres selama $([int]$quietMinutes) menit - menghentikan CLI."
